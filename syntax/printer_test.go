@@ -96,6 +96,10 @@ var printTests = []printCase{
 	samePrint("foo <<EOF\nl1\nEOF\n\nfoo2"),
 	samePrint("<<EOF\nfoo\\\nbar\nEOF"),
 	samePrint("<<'EOF'\nfoo\\\nbar\nEOF"),
+	samePrint("<<EOF\n\\\nEOF"),
+	samePrint("<<EOF\n\\\n$foo\nEOF"),
+	samePrint("<<EOF\n\\\n\\\nEOF"),
+	samePrint("<<EOF\nfoo\\\nEOF"),
 	samePrint("<<'EOF'\n\\\nEOF"),
 	samePrint("{\n\t<<EOF\nfoo\\\nbar\nEOF\n}"),
 	samePrint("{\n\t<<'EOF'\nfoo\\\nbar\nEOF\n}"),
@@ -765,6 +769,10 @@ func TestPrintFunctionNextLine(t *testing.T) {
 			"function foo {\n\tbar\n}",
 			"function foo()\n{\n\tbar\n}",
 		},
+		{
+			"{ foo() { bar; }; }",
+			"{\n\tfoo()\n\t{\n\t\tbar\n\t}\n}",
+		},
 	}
 	parser := NewParser(KeepComments(true))
 	printer := NewPrinter(FunctionNextLine(true))
@@ -818,6 +826,10 @@ func TestPrintKeepPadding(t *testing.T) {
 		{"\tfoo", "foo"},
 		{"  if foo; then bar; fi", "if   foo; then bar; fi"},
 		samePrint("echo '★'  || true"),
+		{
+			"1234 || { x; y; }",
+			"1234 || {\n\tx\n\ty\n}",
+		},
 	}
 	parser := NewParser(KeepComments(true))
 	printer := NewPrinter(KeepPadding(true))

@@ -93,7 +93,7 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func cmdContains(substr string, cmd string, args ...string) bool {
+func cmdContains(substr, cmd string, args ...string) bool {
 	out, err := exec.Command(cmd, args...).CombinedOutput()
 	got := string(out)
 	if err != nil {
@@ -481,7 +481,7 @@ var shellTests = []errorCase{
 	},
 	{
 		in:     "a=b foo() { bar; }",
-		common: `1:8: a command can only contain words and redirects`,
+		common: `1:8: a command can only contain words and redirects; encountered (`,
 	},
 	{
 		in:     "a=b if foo; then bar; fi",
@@ -493,7 +493,7 @@ var shellTests = []errorCase{
 	},
 	{
 		in:     ">f foo() { bar; }",
-		common: `1:7: a command can only contain words and redirects`,
+		common: `1:7: a command can only contain words and redirects; encountered (`,
 	},
 	{
 		in:     ">f if foo; then bar; fi",
@@ -643,7 +643,7 @@ var shellTests = []errorCase{
 	},
 	{
 		in:     "echo foo(",
-		common: `1:9: a command can only contain words and redirects`,
+		common: `1:9: a command can only contain words and redirects; encountered (`,
 	},
 	{
 		in:     "echo &&",
@@ -986,11 +986,11 @@ var shellTests = []errorCase{
 	},
 	{
 		in:     "echo $((a ? b))",
-		common: `1:9: ternary operator missing : after ?`,
+		common: `1:11: ternary operator missing : after ?`,
 	},
 	{
 		in:     "echo $((a : b))",
-		common: `1:9: ternary operator missing ? before :`,
+		common: `1:11: ternary operator missing ? before :`,
 	},
 	{
 		in:     "echo $((/",
@@ -998,7 +998,7 @@ var shellTests = []errorCase{
 	},
 	{
 		in:     "echo $((:",
-		common: `1:9: : must follow an expression`,
+		common: `1:9: ternary operator missing ? before :`,
 	},
 	{
 		in:     "echo $(((a)+=b))",
@@ -1176,7 +1176,7 @@ var shellTests = []errorCase{
 	},
 	{
 		in:     "case i in 3) foo; 4) bar; esac",
-		common: `1:20: a command can only contain words and redirects`,
+		common: `1:20: a command can only contain words and redirects; encountered )`,
 	},
 	{
 		in:     "case i in 3&) foo;",
@@ -1259,7 +1259,7 @@ var shellTests = []errorCase{
 	{
 		in:    "]] )",
 		bsmk:  `1:1: "]]" can only be used to close a test`,
-		posix: `1:4: a command can only contain words and redirects`,
+		posix: `1:4: a command can only contain words and redirects; encountered )`,
 	},
 	{
 		in:    "((foo",
@@ -1338,7 +1338,7 @@ var shellTests = []errorCase{
 	},
 	{
 		in:   "let a:b",
-		bsmk: `1:5: ternary operator missing ? before :`,
+		bsmk: `1:6: ternary operator missing ? before :`,
 	},
 	{
 		in:   "let a+b=c",
@@ -1690,7 +1690,7 @@ var shellTests = []errorCase{
 	},
 	{
 		in:    "function foo() { bar; }",
-		posix: `1:13: a command can only contain words and redirects`,
+		posix: `1:13: a command can only contain words and redirects; encountered (`,
 	},
 	{
 		in:    "echo <(",
@@ -2107,6 +2107,53 @@ var arithmeticTests = []struct {
 			Op: Add,
 			X:  litWord("3"),
 			Y:  litWord("4"),
+		},
+	},
+	{
+		"3 + 4 + 5",
+		&BinaryArithm{
+			Op: Add,
+			X: &BinaryArithm{
+				Op: Add,
+				X:  litWord("3"),
+				Y:  litWord("4"),
+			},
+			Y: litWord("5"),
+		},
+	},
+	{
+		"1 ? 0 : 2",
+		&BinaryArithm{
+			Op: TernQuest,
+			X:  litWord("1"),
+			Y: &BinaryArithm{
+				Op: TernColon,
+				X:  litWord("0"),
+				Y:  litWord("2"),
+			},
+		},
+	},
+	{
+		"a = 3, ++a, a--",
+		&BinaryArithm{
+			Op: Comma,
+			X: &BinaryArithm{
+				Op: Comma,
+				X: &BinaryArithm{
+					Op: Assgn,
+					X:  litWord("a"),
+					Y:  litWord("3"),
+				},
+				Y: &UnaryArithm{
+					Op: Inc,
+					X:  litWord("a"),
+				},
+			},
+			Y: &UnaryArithm{
+				Op:   Dec,
+				Post: true,
+				X:    litWord("a"),
+			},
 		},
 	},
 }

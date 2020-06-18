@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"math/bits"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -82,7 +83,7 @@ func TestMain(m *testing.M) {
 		switch os.Getenv("GOSH_CMD") {
 		case "pid_and_hang":
 			fmt.Println(os.Getpid())
-			select {}
+			time.Sleep(time.Hour)
 		}
 		r := strings.NewReader(os.Args[1])
 		file, err := syntax.NewParser().Parse(r, "")
@@ -269,9 +270,6 @@ var runTests = []runTest{
 	{"printf %d,%i 3 4", "3,4"},
 	{"printf %d", "0"},
 	{"printf %d,%d 010 0x10", "8,16"},
-	{"printf %i,%u -3 -3", "-3,18446744073709551613"},
-	{"printf %o -3", "1777777777777777777775"},
-	{"printf %x -3", "fffffffffffffffd"},
 	{"printf %c,%c,%c foo àa", "f,\xc3,\x00"}, // TODO: use a rune?
 	{"printf %3s a", "  a"},
 	{"printf %3i 1", "  1"},
@@ -1034,6 +1032,13 @@ var runTests = []runTest{
 	{
 		"true $(true) | true", // used to panic
 		"",
+	},
+	{
+		// The first command in the block used to consume stdin, even
+		// though it shouldn't be. We just want to run any arbitrary
+		// non-builtin program that doesn't consume stdin.
+		"echo foo | { $ENV_PROG >/dev/null; cat; }",
+		"foo\n",
 	},
 
 	// redirects
@@ -2275,6 +2280,14 @@ set +o pipefail
 		">foo; ln -s foo sym; echo sy*; echo sy*/",
 		"sym\nsy*/\n",
 	},
+	{
+		"mkdir x-d; >x-f; test -d $PWD/x-*/",
+		"",
+	},
+	{
+		"mkdir dir; >dir/x-f; ln -s dir sym; cd sym; test -f $PWD/x-*",
+		"",
+	},
 
 	// brace expansion; more exhaustive tests in the syntax package
 	{"echo a}b", "a}b\n"},
@@ -2576,14 +2589,6 @@ var runTestsUnix = []runTest{
 		"b\n",
 	},
 
-	// TODO: move back to the main tests list once
-	// https://github.community/t5/GitHub-Actions/TEMP-is-broken-on-Windows/m-p/30432#M427
-	// is fixed.
-	{
-		"mkdir x-d; >x-f; test -d $PWD/x-*/",
-		"",
-	},
-
 	// process substitution; named pipes (fifos) are a TODO for windows
 	{
 		"sed 's/o/e/g' <(echo foo bar)",
@@ -2617,11 +2622,22 @@ var runTestsWindows = []runTest{
 	{"cmd() { :; }; command cmd /c 'echo foo'", "foo\r\n"},
 }
 
+// These tests are specific to 64-bit architectures, and that's fine. We don't
+// need to add explicit versions for 32-bit.
+var runTests64bit = []runTest{
+	{"printf %i,%u -3 -3", "-3,18446744073709551613"},
+	{"printf %o -3", "1777777777777777777775"},
+	{"printf %x -3", "fffffffffffffffd"},
+}
+
 func init() {
 	if runtime.GOOS == "windows" {
 		runTests = append(runTests, runTestsWindows...)
-	} else {
+	} else { // Unix-y
 		runTests = append(runTests, runTestsUnix...)
+	}
+	if bits.UintSize == 64 {
+		runTests = append(runTests, runTests64bit...)
 	}
 }
 
@@ -3160,13 +3176,13 @@ func TestRunnerDir(t *testing.T) {
 			t.Fatal("expected New to error when Dir is missing")
 		}
 	})
-	t.Run("NoDir", func(t *testing.T) {
+	t.Run("NotDir", func(t *testing.T) {
 		_, err := New(Dir("interp_test.go"))
 		if err == nil {
 			t.Fatal("expected New to error when Dir is not a dir")
 		}
 	})
-	t.Run("NoDirAbs", func(t *testing.T) {
+	t.Run("NotDirAbs", func(t *testing.T) {
 		_, err := New(Dir(filepath.Join(wd, "interp_test.go")))
 		if err == nil {
 			t.Fatal("expected New to error when Dir is not a dir")
@@ -3183,6 +3199,63 @@ func TestRunnerDir(t *testing.T) {
 		}
 		if !filepath.IsAbs(r.Dir) {
 			t.Errorf("Runner.Dir is not absolute")
+		}
+	})
+	// Ensure that we treat symlinks and short paths properly, especially
+	// with Dir and globbing.
+	t.Run("SymlinkOrShortPath", func(t *testing.T) {
+		tempDir, err := ioutil.TempDir("", "interp-test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer os.RemoveAll(tempDir)
+
+		realDir := filepath.Join(tempDir, "real-long-dir-name")
+		realFile := filepath.Join(realDir, "realfile")
+
+		if err := os.Mkdir(realDir, 0777); err != nil {
+			t.Fatal(err)
+		}
+		if err := ioutil.WriteFile(realFile, []byte(""), 0666); err != nil {
+			t.Fatal(err)
+		}
+
+		var altDir string
+		if runtime.GOOS == "windows" {
+			short, err := shortPathName(realDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			altDir = short
+			// We replace tempDir later, and it might have been
+			// shortened.
+			tempDir = filepath.Dir(altDir)
+		} else {
+			altDir = filepath.Join(tempDir, "symlink")
+			if err := os.Symlink(realDir, altDir); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		var b bytes.Buffer
+		r, err := New(Dir(altDir), StdIO(nil, &b, &b))
+		if err != nil {
+			t.Fatal(err)
+		}
+		file := parse(t, nil, "echo $PWD $PWD/*")
+		ctx := context.Background()
+		if err := r.Run(ctx, file); err != nil {
+			t.Fatal(err)
+		}
+		got := b.String()
+		got = strings.Replace(got, tempDir, "", -1)
+		got = strings.TrimSpace(got)
+		want := `/symlink /symlink/realfile`
+		if runtime.GOOS == "windows" {
+			want = `\\REAL.{4} \\REAL.{4}\\realfile`
+		}
+		if !regexp.MustCompile(want).MatchString(got) {
+			t.Fatalf("\nwant regexp: %q\ngot: %q", want, got)
 		}
 	})
 }
