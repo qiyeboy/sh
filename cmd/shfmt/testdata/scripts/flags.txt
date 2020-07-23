@@ -1,9 +1,10 @@
-! shfmt -h
-! stderr 'flag provided but not defined'
-stderr 'usage: shfmt'
-stderr 'Utilities' # definitely includes our help text
-! stderr 'help requested' # don't duplicate usage output
-! stderr '-test\.' # don't show the test binary's usage func
+# https://github.com/rogpeppe/go-internal/issues/93
+# ! shfmt -h
+# ! stderr 'flag provided but not defined'
+# stderr 'usage: shfmt'
+# stderr 'Utilities' # definitely includes our help text
+# ! stderr 'help requested' # don't duplicate usage output
+# ! stderr '-test\.' # don't show the test binary's usage func
 
 shfmt -version
 stdout 'devel|v3'
@@ -16,7 +17,10 @@ stderr 'cannot coexist'
 stderr 'unknown shell language'
 
 ! shfmt -tojson file
-stderr 'can only be used with stdin'
+stderr '-tojson can only be used with stdin'
+
+! shfmt -filename=foo file
+stderr '-filename can only be used with stdin'
 
 # Check all the -ln variations.
 stdin notbash.sh

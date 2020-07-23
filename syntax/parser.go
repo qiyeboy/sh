@@ -454,7 +454,8 @@ const (
 	arithmExprLet
 	arithmExprCmd
 	arithmExprBrack
-	testRegexp
+	testExpr
+	testExprRegexp
 	switchCase
 	paramExpName
 	paramExpSlice
@@ -465,7 +466,7 @@ const (
 	allKeepSpaces = paramExpRepl | dblQuotes | hdocBody |
 		hdocBodyTabs | paramExpExp
 	allRegTokens = noState | subCmd | subCmdBckquo | hdocWord |
-		switchCase | arrayElems
+		switchCase | arrayElems | testExpr
 	allArithmExpr = arithmExpr | arithmExprLet | arithmExprCmd |
 		arithmExprBrack | paramExpSlice
 	allParamReg = paramExpName | paramExpSlice
@@ -1991,15 +1992,20 @@ func (p *Parser) caseItems(stop string) (items []*CaseItem) {
 
 func (p *Parser) testClause(s *Stmt) {
 	tc := &TestClause{Left: p.pos}
+	old := p.preNested(testExpr)
 	p.next()
 	if _, ok := p.gotRsrv("]]"); ok || p.tok == _EOF {
 		p.posErr(tc.Left, "test clause requires at least one expression")
 	}
 	tc.X = p.testExpr(dblLeftBrack, tc.Left, false)
+	if tc.X == nil {
+		p.followErrExp(tc.Left, "[[")
+	}
 	tc.Right = p.pos
 	if _, ok := p.gotRsrv("]]"); !ok {
 		p.matchingErr(tc.Left, "[[", "]]")
 	}
+	p.postNested(old)
 	s.Cmd = tc
 }
 
@@ -2021,6 +2027,9 @@ func (p *Parser) testExpr(ftok token, fpos Pos, pastAndOr bool) TestExpr {
 		if p.val == "]]" {
 			return left
 		}
+		if p.tok = token(testBinaryOp(p.val)); p.tok == illegalTok {
+			p.curErr("not a valid test operator: %s", p.val)
+		}
 	case rdrIn, rdrOut:
 	case _EOF, rightParen:
 		return left
@@ -2028,11 +2037,6 @@ func (p *Parser) testExpr(ftok token, fpos Pos, pastAndOr bool) TestExpr {
 		p.curErr("test operator words must consist of a single literal")
 	default:
 		p.curErr("not a valid test operator: %v", p.tok)
-	}
-	if p.tok == _LitWord {
-		if p.tok = token(testBinaryOp(p.val)); p.tok == illegalTok {
-			p.curErr("not a valid test operator: %s", p.val)
-		}
 	}
 	b := &BinaryTest{
 		OpPos: p.pos,
@@ -2057,7 +2061,7 @@ func (p *Parser) testExpr(ftok token, fpos Pos, pastAndOr bool) TestExpr {
 		// TODO(mvdan): Using nested states within a regex will break in
 		// all sorts of ways. The better fix is likely to use a stop
 		// token, like we do with heredocs.
-		p.quote = testRegexp
+		p.quote = testExprRegexp
 		fallthrough
 	default:
 		if _, ok := b.X.(*Word); !ok {
@@ -2111,8 +2115,17 @@ func (p *Parser) testExprBase(ftok token, fpos Pos) TestExpr {
 		}
 		pe.Rparen = p.matched(pe.Lparen, leftParen, rightParen)
 		return pe
+	case _LitWord:
+		if p.val == "]]" {
+			return nil
+		}
+		fallthrough
 	default:
-		return p.followWordTok(ftok, fpos)
+		if w := p.getWord(); w != nil {
+			return w
+		}
+		// otherwise we'd return a typed nil above
+		return nil
 	}
 }
 
